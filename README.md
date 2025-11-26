@@ -36,11 +36,13 @@ You can also refer to a sample file samples/sample_inp.csv
         python predict.py \
                 -inp_fpath samples/sample_inp.csv \
                 -model_dpath models \
-                -batch_size 64 \
+                -batch_size 100 \
+                -embed_batch_size 10 \
                 -device cuda:0 \
                 -out_fpath catapro_prediction.csv
 
-Finally, the prediction results from CataPro are stored in the "catapro_prediction.csv" file. You can also run "bash run_catapro.sh" directly in the inference directory to achieve the above process.
+Finally, the prediction results from CataPro are stored in the `catapro_prediction.csv` file. You can also run `bash run_catapro.sh` directly in the inference directory to achieve the above process.
 
+The `batch_size` option directs, how many sequences will be predicted at once, `embed_batch_size directs` controls how large batches of embeddings will be generated at once. `embed_batch_size` massively affects GPU memory usage, careful adjustments are advised.
 ## Question and Answer
 To be updated ...
