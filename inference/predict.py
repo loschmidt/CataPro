@@ -1,15 +1,13 @@
-import torch as th
-import torch.nn as nn
 import pandas as pd
-import numpy as np
 from utils import *
 from model import *
-from act_model import KcatModel as _KcatModel
-from act_model import KmModel as _KmModel
+from transformers import T5EncoderModel, T5Tokenizer
 from act_model import ActivityModel
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from argparse import RawDescriptionHelpFormatter
 import argparse
+
+import csv
 
 class EnzymeDatasets(Dataset):
     def __init__(self, values):
@@ -21,41 +19,25 @@ class EnzymeDatasets(Dataset):
     def __len__(self):
         return len(self.values)
 
-def get_datasets(inp_fpath, ProtT5_model, MolT5_model):
-    inp_df = pd.read_csv(inp_fpath, index_col=0)
-    ezy_ids = inp_df["Enzyme_id"].values
-    ezy_type = inp_df["type"].values
-    ezy_keys = [f"{_id}_{t}" for _id, t in zip(ezy_ids, ezy_type)]
-    sequences = inp_df["sequence"].values 
-    smiles = inp_df["smiles"].values
-    
-    seq_ProtT5 = Seq_to_vec(sequences, ProtT5_model)
-    smi_molT5 = get_molT5_embed(smiles, MolT5_model)
-    smi_macc = GetMACCSKeys(smiles)
-    
-    feats = th.from_numpy(np.concatenate([seq_ProtT5, smi_molT5, smi_macc], axis=1)).to(th.float32)
-    datasets = EnzymeDatasets(feats)
-    dataloader = DataLoader(datasets)
-    
-    return ezy_keys, smiles, dataloader
 
-def inference(kcat_model, Km_model, act_model, dataloader, device="cuda:0"):
-    kcat_model.eval()
-    Km_model.eval()
-    act_model.eval()
-    with th.no_grad():
-        pred_list = []
-        for step, data in enumerate(dataloader):
-            data = data.to(device)
-            ezy_feats = data[:, :1024]
-            sbt_feats = data[:, 1024:]
-            pred_kcat = kcat_model(ezy_feats, sbt_feats).cpu().numpy()
-            pred_Km = Km_model(ezy_feats, sbt_feats).cpu().numpy()
-            pred_act = act_model(ezy_feats, sbt_feats)[-1].cpu().numpy()
-            pred_list.append(np.concatenate([pred_kcat, pred_Km, pred_act], axis=1))
-        
-        return np.concatenate(pred_list, axis=0)
-            
+def write_chunk_results(writer, ezy_keys, smiles_list, kcat_tensor, km_tensor, act_tensor):
+    n_samples = len(ezy_keys)
+
+    kcat_cpu = kcat_tensor.cpu().numpy()
+    km_cpu = km_tensor.cpu().numpy()
+    act_cpu = act_tensor.cpu().numpy()
+
+    for i in range(n_samples):
+        row = [
+            ezy_keys[i],
+            smiles_list[i],
+            float(kcat_cpu[i, 0]),
+            float(km_cpu[i, 0]),
+            float(act_cpu[i, 0])
+        ]
+        writer.writerow(row)
+
+
 if __name__ == "__main__":
     d = "RUN CATAPRO ..."
     parser = argparse.ArgumentParser(description=d, formatter_class=RawDescriptionHelpFormatter)
@@ -65,6 +47,8 @@ if __name__ == "__main__":
                          help="Input. The path of saved models.")
     parser.add_argument("-batch_size", type=int, default=64,
                         help="Input. Batch size")
+    parser.add_argument("-embed_batch_size", type=int, default=16,
+                        help="Input. Embedings batch size")
     parser.add_argument("-device", type=str, default="cuda",
                         help="Input. The device: cuda or cpu.")
     parser.add_argument("-out_fpath", type=str, default="catapro_predict_score.csv",
@@ -76,35 +60,87 @@ if __name__ == "__main__":
     batch_size = args.batch_size 
     device = args.device
     out_fpath = args.out_fpath
-    
+    embed_batch_size = args.embed_batch_size
+
     kcat_model_dpath = f"{model_dpath}/kcat_models"
     Km_model_dpath = f"{model_dpath}/Km_models"
     act_model_dpath = f"{model_dpath}/act_models"
     ProtT5_model = f"{model_dpath}/prot_t5_xl_uniref50/"
     MolT5_model = f"{model_dpath}/molt5-base-smiles2caption"
 
-    ezy_ids, smiles_list, dataloader = get_datasets(inp_fpath, ProtT5_model, MolT5_model)
-    
-    pred_kcat_list = []
-    pred_Km_list = []
-    pred_act_list = []
-    for fold in range(10):    
-        kcat_model = KcatModel(device=device)
-        kcat_model.load_state_dict(th.load(f"{kcat_model_dpath}/{fold}_bestmodel.pth", map_location=device))
-        Km_model = KmModel(device=device)
-        Km_model.load_state_dict(th.load(f"{Km_model_dpath}/{fold}_bestmodel.pth", map_location=device))
-        act_model = ActivityModel(device=device)
-        act_model.load_state_dict(th.load(f"{act_model_dpath}/{fold}_bestmodel.pth", map_location=device))
+    prot_tokenizer = T5Tokenizer.from_pretrained(ProtT5_model, do_lower_case=False)
+    prot_model = T5EncoderModel.from_pretrained(ProtT5_model)
+    prot_model = prot_model.to(device).eval()
 
-        pred_score = inference(kcat_model, Km_model, act_model, dataloader, device)
-        pred_kcat_list.append(pred_score[:, :1])
-        pred_Km_list.append(pred_score[:, 1:2])
-        pred_act_list.append(pred_score[:, -1:])
-    
-    pred_kcat = np.mean(np.concatenate(pred_kcat_list, axis=1), axis=1, keepdims=True)
-    pred_Km = np.mean(np.concatenate(pred_Km_list, axis=1), axis=1, keepdims=True)
-    pred_act = np.mean(np.concatenate(pred_act_list, axis=1), axis=1, keepdims=True)
-    
-    final_score = np.concatenate([np.array(ezy_ids).reshape(-1, 1), np.array(smiles_list).reshape(-1, 1), pred_kcat, pred_Km, pred_act], axis=1)
-    final_df = pd.DataFrame(final_score, columns=["fasta_id", "smiles", "pred_log10[kcat(s^-1)]", "pred_log10[Km(mM)]", "pred_log10[kcat/Km(s^-1mM^-1)]"])
-    final_df.to_csv(out_fpath)
+    mol_tokenizer = T5Tokenizer.from_pretrained(MolT5_model)
+    mol_model = T5EncoderModel.from_pretrained(MolT5_model)
+    mol_model = mol_model.to(device).eval()
+
+    kcat_models, km_models, act_models = [], [], []
+    for fold in range(10):
+        kcat = KcatModel(device=device)
+        kcat.load_state_dict(th.load(f"{kcat_model_dpath}/{fold}_bestmodel.pth", map_location=device))
+        kcat.eval()
+        kcat_models.append(kcat)
+
+        km = KmModel(device=device)
+        km.load_state_dict(th.load(f"{Km_model_dpath}/{fold}_bestmodel.pth", map_location=device))
+        km.eval()
+        km_models.append(km)
+
+        act = ActivityModel(device=device)
+        act.load_state_dict(th.load(f"{act_model_dpath}/{fold}_bestmodel.pth", map_location=device))
+        act.eval()
+        act_models.append(act)
+
+    with open(out_fpath, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["fasta_id", "smiles", "pred_log10[kcat(s^-1)]",
+                         "pred_log10[Km(mM)]", "pred_log10[kcat/Km(s^-1mM^-1)]"])
+
+        total_processed = 0
+        for chunk_df in pd.read_csv(inp_fpath, index_col=0, chunksize=batch_size):
+            print(f"\n=== Processing chunk starting at row {total_processed} ===")
+
+            ezy_ids = chunk_df["Enzyme_id"].values
+            ezy_type = chunk_df["type"].values
+            ezy_keys = [f"{_id}_{t}" for _id, t in zip(ezy_ids, ezy_type)]
+            sequences = chunk_df["sequence"].values
+            smiles = chunk_df["smiles"].values
+
+            print(f"Generating embeddings for {len(sequences)} samples...")
+            seq_embed = Seq_to_vec(sequences, prot_tokenizer, prot_model, device, embed_batch_size)
+            mol_embed = get_molT5_embed(smiles, mol_tokenizer, mol_model, device, embed_batch_size)
+            macc_embed = GetMACCSKeys(smiles, device)
+
+            features = th.cat([seq_embed, mol_embed, macc_embed], dim=1).to(th.float32)
+
+            print(f"Running predictions...")
+
+            kcat_preds = th.zeros(len(sequences), 1, device=device)
+            km_preds = th.zeros(len(sequences), 1, device=device)
+            act_preds = th.zeros(len(sequences), 1, device=device)
+
+            with th.no_grad():
+                for fold in range(10):
+                    ezy_feats = features[:, :1024]
+                    sbt_feats = features[:, 1024:]
+
+                    kcat_preds += kcat_models[fold](ezy_feats, sbt_feats).reshape(-1, 1)
+                    km_preds += km_models[fold](ezy_feats, sbt_feats).reshape(-1, 1)
+                    act_preds += act_models[fold](ezy_feats, sbt_feats)[-1].reshape(-1, 1)
+
+
+            kcat_preds /= 10
+            km_preds /= 10
+            act_preds /= 10
+
+            write_chunk_results(writer, ezy_keys, smiles,
+                                kcat_preds, km_preds, act_preds)
+
+            del seq_embed, mol_embed, macc_embed, features
+            del kcat_preds, km_preds, act_preds
+            th.cuda.empty_cache()
+
+            total_processed += len(sequences)
+            print(f"Completed {total_processed} samples total")
