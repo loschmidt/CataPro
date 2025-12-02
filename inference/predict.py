@@ -20,7 +20,7 @@ class EnzymeDatasets(Dataset):
         return len(self.values)
 
 
-def write_chunk_results(writer, ezy_keys, smiles_list, kcat_tensor, km_tensor, act_tensor):
+def write_chunk_results(writer, ezy_keys, smiles_list, kcat_tensor, km_tensor, act_tensor, offset):
     n_samples = len(ezy_keys)
 
     kcat_cpu = kcat_tensor.cpu().numpy()
@@ -29,6 +29,7 @@ def write_chunk_results(writer, ezy_keys, smiles_list, kcat_tensor, km_tensor, a
 
     for i in range(n_samples):
         row = [
+            offset + i,
             ezy_keys[i],
             smiles_list[i],
             float(kcat_cpu[i, 0]),
@@ -95,7 +96,7 @@ if __name__ == "__main__":
 
     with open(out_fpath, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["fasta_id", "smiles", "pred_log10[kcat(s^-1)]",
+        writer.writerow(["", "fasta_id", "smiles", "pred_log10[kcat(s^-1)]",
                          "pred_log10[Km(mM)]", "pred_log10[kcat/Km(s^-1mM^-1)]"])
 
         total_processed = 0
@@ -136,7 +137,7 @@ if __name__ == "__main__":
             act_preds /= 10
 
             write_chunk_results(writer, ezy_keys, smiles,
-                                kcat_preds, km_preds, act_preds)
+                                kcat_preds, km_preds, act_preds, total_processed)
 
             del seq_embed, mol_embed, macc_embed, features
             del kcat_preds, km_preds, act_preds
