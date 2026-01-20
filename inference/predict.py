@@ -51,7 +51,7 @@ if __name__ == "__main__":
                         help="Input. Batch size")
     parser.add_argument("-embed_batch_size", type=int, default=16,
                         help="Input. Embedings batch size")
-    parser.add_argument("-device", type=str, choices=['cuda', 'cpu'], default="cuda",
+    parser.add_argument("-device", type=str, default="cuda",
                         help="Input. The device: cuda or cpu.")
     parser.add_argument("-out_fpath", type=str, default="catapro_predict_score.csv",
                         help="Input. Store the predicted kinetic parameters in this file..")
