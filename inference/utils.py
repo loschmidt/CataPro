@@ -26,7 +26,6 @@ def Seq_to_vec(sequences, tokenizer, model, device='cuda', batch_size=8):
             attention_mask = ids['attention_mask'].to(device)
 
             embedding = model(input_ids=input_ids, attention_mask=attention_mask)
-            torch.set_printoptions(linewidth=200, sci_mode=False, precision=9)
 
             for seq_num in range(len(batch_seqs)):
                 seq_len = (attention_mask[seq_num] == 1).sum()
