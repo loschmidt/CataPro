@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import pandas as pd
 from utils import Seq_to_vec, get_molT5_embed, GetMACCSKeys
 from model import KcatModel, KmModel
@@ -9,6 +12,9 @@ from argparse import RawDescriptionHelpFormatter
 import argparse
 
 import csv
+
+PROT_T5_MODEL_ID = "Rostlab/prot_t5_xl_uniref50"
+MOL_T5_MODEL_ID = "laituan245/molt5-base-smiles2caption"
 
 class EnzymeDatasets(Dataset):
     def __init__(self, values):
@@ -45,8 +51,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=d, formatter_class=RawDescriptionHelpFormatter)
     parser.add_argument("-inp_fpath", type=str, default="enzyme.fasta",
                          help="Input (.fasta). The path of enzyme file.")
-    parser.add_argument("-model_dpath", type=str, default="model_dpah",
-                         help="Input. The path of saved models.")
+    parser.add_argument("-model_dpath", type=str, default=Path(__file__).parent.parent / "models",
+                         help="Input. The path of saved CataPro models.")
     parser.add_argument("-batch_size", type=int, default=64,
                         help="Input. Batch size")
     parser.add_argument("-embed_batch_size", type=int, default=16,
@@ -55,6 +61,10 @@ if __name__ == "__main__":
                         help="Input. The device: cuda or cpu.")
     parser.add_argument("-out_fpath", type=str, default="catapro_predict_score.csv",
                         help="Input. Store the predicted kinetic parameters in this file..")
+    parser.add_argument("-hf_cache", type=str, default="~/.cache/huggingface/hub",
+                        help="Input. HuggingFace cache directory for ProtT5 and MolT5 models.")
+    parser.add_argument("-hf_download", action="store_true",
+                        help="Input. Allow downloading HF models if not cached (default: offline/local only).")
     args = parser.parse_args()
 
     inp_fpath = args.inp_fpath
@@ -64,18 +74,19 @@ if __name__ == "__main__":
     out_fpath = args.out_fpath
     embed_batch_size = args.embed_batch_size
 
+    hf_cache = os.path.expanduser(args.hf_cache)
+    hf_local_only = not args.hf_download
+
     kcat_model_dpath = f"{model_dpath}/kcat_models"
     Km_model_dpath = f"{model_dpath}/Km_models"
     act_model_dpath = f"{model_dpath}/act_models"
-    ProtT5_model = f"{model_dpath}/prot_t5_xl_uniref50/"
-    MolT5_model = f"{model_dpath}/molt5-base-smiles2caption"
 
-    prot_tokenizer = T5Tokenizer.from_pretrained(ProtT5_model, do_lower_case=False)
-    prot_model = T5EncoderModel.from_pretrained(ProtT5_model)
+    prot_tokenizer = T5Tokenizer.from_pretrained(PROT_T5_MODEL_ID, cache_dir=hf_cache, local_files_only=hf_local_only, do_lower_case=False)
+    prot_model = T5EncoderModel.from_pretrained(PROT_T5_MODEL_ID, cache_dir=hf_cache, local_files_only=hf_local_only)
     prot_model = prot_model.to(device).eval()
 
-    mol_tokenizer = T5Tokenizer.from_pretrained(MolT5_model)
-    mol_model = T5EncoderModel.from_pretrained(MolT5_model)
+    mol_tokenizer = T5Tokenizer.from_pretrained(MOL_T5_MODEL_ID, cache_dir=hf_cache, local_files_only=hf_local_only)
+    mol_model = T5EncoderModel.from_pretrained(MOL_T5_MODEL_ID, cache_dir=hf_cache, local_files_only=hf_local_only)
     mol_model = mol_model.to(device).eval()
 
     kcat_models, km_models, act_models = [], [], []
